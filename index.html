@@ -1,0 +1,1849 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>中药智能算价器 · 拍照识方</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+  // Tesseract.js CDN 备用源（国内访问更快）
+  if (typeof Tesseract === 'undefined') {
+    var s = document.createElement('script');
+    s.src = 'https://unpkg.com/tesseract.js@5/dist/tesseract.min.js';
+    document.head.appendChild(s);
+  }
+</script>
+<style>
+  /* 系统原生中文字体（微信/国内浏览器可用） */
+  /* 衬线字体用于标题，无衬线用于正文，确保任何环境都能正常显示 */
+  :root {
+    --rice-paper: #F5F0E8;
+    --rice-paper-deep: #EDE5D3;
+    --ink: #2C2C2C;
+    --ink-light: #5C5548;
+    --ink-faint: #9B9486;
+    --cinnabar: #C13B2A;
+    --cinnabar-light: #E8584A;
+    --cinnabar-dark: #8B2A1E;
+    --gold: #C4A35A;
+    --gold-light: #E8D5A3;
+    --gold-faint: rgba(196, 163, 90, 0.15);
+    --mahogany: #6B4226;
+    --mahogany-light: #8B6342;
+    --herb-green: #5A7247;
+    --herb-green-light: #7A9B62;
+    --card-bg: rgba(255, 252, 245, 0.88);
+    --card-border: rgba(196, 163, 90, 0.3);
+    --shadow-soft: 0 2px 20px rgba(107, 66, 38, 0.08);
+    --shadow-deep: 0 8px 32px rgba(107, 66, 38, 0.15);
+    --radius: 6px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'WenQuanYi Micro Hei', sans-serif;
+    background: var(--rice-paper);
+    color: var(--ink);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse at 20% 50%, rgba(196, 163, 90, 0.08) 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 20%, rgba(193, 59, 42, 0.04) 0%, transparent 50%),
+      radial-gradient(ellipse at 50% 80%, rgba(90, 114, 71, 0.06) 0%, transparent 50%),
+      url("data:image/svg+xml,%3Csvg width='100' height='100' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100' height='100' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .header-ornament {
+    height: 6px;
+    background: repeating-linear-gradient(
+      90deg, var(--cinnabar) 0px, var(--cinnabar) 12px,
+      transparent 12px, transparent 16px,
+      var(--gold) 16px, var(--gold) 28px,
+      transparent 28px, transparent 32px
+    );
+    opacity: 0.7;
+  }
+
+  header {
+    position: relative;
+    z-index: 1;
+    padding: 32px 40px 24px;
+    text-align: center;
+  }
+
+  header h1 {
+    font-family: 'STKaiti', 'KaiTi', '楷体', 'Kai', serif;
+    font-size: 2.6rem;
+    color: var(--ink);
+    letter-spacing: 0.15em;
+    position: relative;
+    display: inline-block;
+  }
+
+  header h1::before, header h1::after {
+    content: '◆';
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--cinnabar);
+    font-size: 0.5rem;
+    opacity: 0.6;
+  }
+  header h1::before { left: -30px; }
+  header h1::after { right: -30px; }
+
+  header .subtitle {
+    font-size: 0.9rem;
+    color: var(--ink-faint);
+    margin-top: 8px;
+    letter-spacing: 0.3em;
+    font-weight: 200;
+  }
+  .header-line {
+    width: 200px; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--gold), transparent);
+    margin: 14px auto 0;
+  }
+
+  .main-container {
+    position: relative;
+    z-index: 1;
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 20px 30px 60px;
+    display: grid;
+    grid-template-columns: 1fr 400px;
+    gap: 28px;
+  }
+
+  /* ===== 左侧：OCR + 药材库 ===== */
+  .left-panel { display: flex; flex-direction: column; gap: 20px; }
+
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius);
+    backdrop-filter: blur(10px);
+    overflow: hidden;
+    box-shadow: var(--shadow-soft);
+    animation: fadeSlideUp 0.5s ease forwards;
+  }
+
+  @keyframes fadeSlideUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .card-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--card-border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .card-header .icon { font-size: 1.2rem; }
+  .card-header h3 {
+    font-family: 'STKaiti', 'KaiTi', '楷体', 'Kai', serif;
+    font-size: 1.15rem;
+    letter-spacing: 0.08em;
+    color: var(--ink);
+  }
+  .card-body { padding: 20px; }
+
+  /* 上传区域 */
+  .upload-zone {
+    border: 2px dashed var(--card-border);
+    border-radius: var(--radius);
+    padding: 36px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s;
+    position: relative;
+    overflow: hidden;
+  }
+  .upload-zone:hover, .upload-zone.dragover {
+    border-color: var(--gold);
+    background: var(--gold-faint);
+  }
+  .upload-zone .upload-icon {
+    font-size: 2.5rem;
+    color: var(--gold);
+    margin-bottom: 10px;
+    display: block;
+  }
+  .upload-zone .upload-text {
+    font-size: 0.95rem;
+    color: var(--ink-light);
+    letter-spacing: 0.1em;
+  }
+  .upload-zone .upload-hint {
+    font-size: 0.78rem;
+    color: var(--ink-faint);
+    margin-top: 6px;
+  }
+  .upload-zone input[type="file"] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .image-preview {
+    display: none;
+    position: relative;
+    border-radius: var(--radius);
+    overflow: hidden;
+    border: 1px solid var(--card-border);
+  }
+  .image-preview img {
+    width: 100%;
+    max-height: 300px;
+    object-fit: contain;
+    background: #f0ebe2;
+    display: block;
+  }
+  .image-preview .preview-actions {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    padding: 12px;
+    background: linear-gradient(transparent, rgba(0,0,0,0.5));
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+  }
+
+  .btn {
+    padding: 8px 18px;
+    border-radius: var(--radius);
+    font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'WenQuanYi Micro Hei', sans-serif;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0.3s;
+    letter-spacing: 0.08em;
+    border: 1px solid transparent;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn.primary {
+    background: var(--cinnabar);
+    border-color: var(--cinnabar);
+    color: white;
+  }
+  .btn.primary:hover { background: var(--cinnabar-dark); }
+  .btn.primary:disabled {
+    background: var(--ink-faint);
+    border-color: var(--ink-faint);
+    cursor: not-allowed;
+  }
+  .btn.secondary {
+    background: transparent;
+    border-color: var(--card-border);
+    color: var(--ink-light);
+  }
+  .btn.secondary:hover { border-color: var(--gold); }
+  .btn.ghost {
+    background: rgba(255,255,255,0.7);
+    border-color: rgba(255,255,255,0.5);
+    color: var(--ink);
+  }
+  .btn.ghost:hover { background: white; }
+
+  /* OCR 进度 */
+  .ocr-progress {
+    display: none;
+    padding: 20px;
+    text-align: center;
+  }
+  .ocr-progress.active { display: block; }
+  .progress-bar {
+    width: 100%;
+    height: 4px;
+    background: var(--rice-paper-deep);
+    border-radius: 2px;
+    overflow: hidden;
+    margin: 12px 0;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--gold), var(--cinnabar));
+    border-radius: 2px;
+    transition: width 0.3s;
+    width: 0%;
+  }
+  .progress-text {
+    font-size: 0.82rem;
+    color: var(--ink-faint);
+  }
+
+  /* 识别文本区 */
+  .ocr-text-area {
+    width: 100%;
+    min-height: 120px;
+    padding: 14px;
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius);
+    background: rgba(255,252,245,0.6);
+    font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'WenQuanYi Micro Hei', sans-serif;
+    font-size: 0.92rem;
+    line-height: 1.8;
+    color: var(--ink);
+    resize: vertical;
+    transition: border-color 0.3s;
+  }
+  .ocr-text-area:focus {
+    outline: none;
+    border-color: var(--gold);
+    box-shadow: 0 0 0 3px var(--gold-faint);
+  }
+  .ocr-text-area::placeholder { color: var(--ink-faint); }
+
+  .parse-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
+
+  /* 解析结果预览 */
+  .parse-preview {
+    margin-top: 16px;
+  }
+  .parse-preview-title {
+    font-size: 0.85rem;
+    color: var(--ink-faint);
+    letter-spacing: 0.1em;
+    margin-bottom: 10px;
+  }
+
+  .preview-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+  }
+  .preview-table th {
+    text-align: left;
+    padding: 8px 10px;
+    color: var(--ink-faint);
+    font-weight: 400;
+    border-bottom: 1px solid var(--card-border);
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+  }
+  .preview-table td {
+    padding: 10px;
+    border-bottom: 1px dashed rgba(196,163,90,0.15);
+    vertical-align: middle;
+  }
+  .preview-table tr:last-child td { border-bottom: none; }
+  .preview-table .herb-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .preview-table .herb-cell .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .status-dot.ok { background: var(--herb-green); }
+  .status-dot.warn { background: var(--gold); }
+  .status-dot.err { background: var(--cinnabar); }
+
+  .preview-table .price-cell {
+    color: var(--cinnabar);
+    font-weight: 600;
+    text-align: right;
+  }
+  .preview-table .input-cell input {
+    width: 50px;
+    text-align: center;
+    border: 1px solid var(--card-border);
+    border-radius: 4px;
+    padding: 4px;
+    font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'WenQuanYi Micro Hei', sans-serif;
+    font-size: 0.85rem;
+    background: transparent;
+  }
+  .preview-table .input-cell input:focus {
+    outline: none;
+    border-color: var(--gold);
+  }
+
+  /* 未识别提示 */
+  .unmatched-box {
+    margin-top: 12px;
+    padding: 12px 14px;
+    background: rgba(193,59,42,0.04);
+    border: 1px dashed rgba(193,59,42,0.2);
+    border-radius: var(--radius);
+    font-size: 0.82rem;
+    color: var(--cinnabar-dark);
+    line-height: 1.8;
+  }
+  .unmatched-box .um-title {
+    font-weight: 600;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* 明显档位切换 */
+  .tier-switcher {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+  }
+  .tier-switcher .ts-label {
+    font-size: 0.8rem;
+    color: var(--ink-light);
+    letter-spacing: 0.05em;
+    margin-right: 4px;
+    flex-shrink: 0;
+  }
+  .tier-btn {
+    padding: 6px 14px;
+    border-radius: 4px;
+    border: 1.5px solid var(--card-border);
+    background: transparent;
+    cursor: pointer;
+    font-size: 0.82rem;
+    color: var(--ink-light);
+    transition: all 0.25s;
+    font-family: inherit;
+    letter-spacing: 0.03em;
+    flex-shrink: 0;
+  }
+  .tier-btn:hover {
+    border-color: var(--gold);
+    background: var(--gold-faint);
+  }
+  .tier-btn.active {
+    border-color: var(--cinnabar);
+    background: var(--cinnabar);
+    color: #fff;
+    font-weight: 600;
+    box-shadow: 0 2px 8px rgba(193, 59, 42, 0.25);
+  }
+  .tier-btn.tier-base.active {
+    border-color: var(--herb-green);
+    background: var(--herb-green);
+    box-shadow: 0 2px 8px rgba(90, 114, 71, 0.25);
+  }
+
+  /* 调价款加粗 */
+  .selected-item.adjustment {
+    background: rgba(196, 163, 90, 0.06);
+    border-radius: 4px;
+    margin: 0 -4px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .selected-item.adjustment .item-name {
+    font-weight: 900;
+    color: var(--mahogany);
+    font-size: 0.95rem;
+  }
+  .selected-item.adjustment .item-subtotal {
+    font-weight: 900;
+    font-size: 1rem;
+  }
+
+  /* 药材库 */
+  .search-bar {
+    position: relative;
+    margin-bottom: 12px;
+  }
+  .search-bar input {
+    width: 100%;
+    padding: 12px 16px 12px 42px;
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius);
+    background: var(--card-bg);
+    font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'WenQuanYi Micro Hei', sans-serif;
+    font-size: 0.9rem;
+    color: var(--ink);
+  }
+  .search-bar input::placeholder { color: var(--ink-faint); letter-spacing: 0.1em; }
+  .search-bar input:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-faint); }
+  .search-bar .search-icon {
+    position: absolute;
+    left: 14px; top: 50%;
+    transform: translateY(-50%);
+    color: var(--ink-faint);
+    font-size: 1rem;
+  }
+
+  .category-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .cat-tab {
+    padding: 6px 14px;
+    border: 1px solid var(--card-border);
+    border-radius: 20px;
+    background: transparent;
+    font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'WenQuanYi Micro Hei', sans-serif;
+    font-size: 0.78rem;
+    color: var(--ink-light);
+    cursor: pointer;
+    transition: all 0.3s;
+    letter-spacing: 0.05em;
+  }
+  .cat-tab:hover { border-color: var(--gold); color: var(--mahogany); }
+  .cat-tab.active { background: var(--mahogany); border-color: var(--mahogany); color: var(--rice-paper); }
+
+  .herb-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 10px;
+    max-height: 280px;
+    overflow-y: auto;
+    padding-right: 6px;
+  }
+  .herb-grid::-webkit-scrollbar { width: 4px; }
+  .herb-grid::-webkit-scrollbar-thumb { background: var(--gold); border-radius: 2px; }
+
+  .herb-card {
+    background: rgba(255,252,245,0.5);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    transition: all 0.3s;
+    animation: fadeIn 0.4s ease forwards;
+    opacity: 0;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .herb-card:hover { border-color: var(--gold); box-shadow: var(--shadow-soft); transform: translateY(-1px); }
+  .herb-card.added { border-color: var(--cinnabar); background: rgba(193,59,42,0.04); }
+  .herb-info { flex: 1; min-width: 0; }
+  .herb-name { font-size: 0.95rem; font-weight: 600; letter-spacing: 0.06em; }
+  .herb-name .alias { font-size: 0.72rem; color: var(--ink-faint); font-weight: 400; margin-left: 4px; }
+  .herb-meta { font-size: 0.72rem; color: var(--ink-faint); margin-top: 3px; }
+  .herb-price { font-size: 1rem; font-weight: 700; color: var(--cinnabar); white-space: nowrap; margin-right: 8px; }
+  .herb-price .unit { font-size: 0.65rem; font-weight: 400; color: var(--ink-faint); }
+  .add-btn {
+    width: 26px; height: 26px;
+    border: 1.5px solid var(--card-border);
+    border-radius: 50%;
+    background: transparent;
+    color: var(--gold);
+    font-size: 1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s;
+    flex-shrink: 0;
+    line-height: 1;
+  }
+  .add-btn:hover { background: var(--cinnabar); border-color: var(--cinnabar); color: white; transform: rotate(90deg); }
+  .add-btn.added { background: var(--cinnabar); border-color: var(--cinnabar); color: white; }
+
+  /* ===== 右侧：处方面板 ===== */
+  .prescription-panel {
+    position: sticky;
+    top: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .prescription-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius);
+    backdrop-filter: blur(10px);
+    overflow: hidden;
+    box-shadow: var(--shadow-soft);
+  }
+  .prescription-header {
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--card-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .prescription-title {
+    font-family: 'STKaiti', 'KaiTi', '楷体', 'Kai', serif;
+    font-size: 1.2rem;
+    letter-spacing: 0.1em;
+  }
+  .prescription-count {
+    font-size: 0.78rem;
+    color: var(--ink-faint);
+    padding: 3px 10px;
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+  }
+
+  .selected-list {
+    padding: 10px 14px;
+    max-height: 45vh;
+    overflow-y: auto;
+    min-height: 80px;
+  }
+  .selected-list::-webkit-scrollbar { width: 3px; }
+  .selected-list::-webkit-scrollbar-thumb { background: var(--gold); border-radius: 2px; }
+  .empty-msg {
+    text-align: center;
+    color: var(--ink-faint);
+    font-size: 0.82rem;
+    padding: 24px 0;
+    letter-spacing: 0.1em;
+  }
+
+  .selected-item {
+    display: flex;
+    align-items: center;
+    padding: 10px 6px;
+    border-bottom: 1px dashed rgba(196,163,90,0.15);
+    animation: fadeIn 0.3s ease;
+  }
+  .selected-item:last-child { border-bottom: none; }
+  .item-name { flex: 1; font-size: 0.88rem; font-weight: 600; letter-spacing: 0.04em; }
+  .dose-control { display: flex; align-items: center; gap: 5px; margin: 0 8px; }
+  .dose-btn {
+    width: 22px; height: 22px;
+    border: 1px solid var(--card-border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--ink-light);
+    font-size: 0.8rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .dose-btn:hover { background: var(--gold-faint); border-color: var(--gold); }
+  .dose-input {
+    width: 38px;
+    text-align: center;
+    border: none;
+    background: transparent;
+    font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'WenQuanYi Micro Hei', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 2px;
+  }
+  .dose-input:focus { outline: none; background: var(--gold-faint); border-radius: 3px; }
+  .dose-unit { font-size: 0.68rem; color: var(--ink-faint); }
+  .item-subtotal { font-size: 0.85rem; font-weight: 600; color: var(--cinnabar); min-width: 52px; text-align: right; }
+  .remove-btn {
+    margin-left: 6px;
+    border: none;
+    background: transparent;
+    color: var(--ink-faint);
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: color 0.2s;
+    padding: 4px;
+  }
+  .remove-btn:hover { color: var(--cinnabar); }
+
+  /* 总价大卡片 */
+  .big-price-card {
+    background: linear-gradient(135deg, var(--cinnabar) 0%, var(--cinnabar-dark) 100%);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    color: white;
+    text-align: center;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 16px rgba(193,59,42,0.25);
+  }
+  .big-price-card .bp-label {
+    font-size: 0.85rem;
+    letter-spacing: 0.2em;
+    opacity: 0.85;
+    margin-bottom: 6px;
+  }
+  .big-price-card .bp-value {
+    font-size: 2.6rem;
+    font-weight: 900;
+    font-family: 'STKaiti', 'KaiTi', '楷体', 'Kai', serif;
+    letter-spacing: 0.03em;
+    line-height: 1;
+    transition: transform 0.2s ease;
+  }
+  .big-price-card .bp-value.flash {
+    animation: priceFlash 0.4s ease;
+  }
+  @keyframes priceFlash {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.08); }
+    100% { transform: scale(1); }
+  }
+  .big-price-card .bp-detail {
+    font-size: 0.75rem;
+    opacity: 0.7;
+    margin-top: 8px;
+    letter-spacing: 0.05em;
+  }
+
+  /* 总价区域（页面顶部） */
+  .top-price-section {
+    position: relative;
+    z-index: 1;
+    max-width: 1400px;
+    margin: 0 auto 20px;
+    padding: 0 30px;
+  }
+  .top-price-section .big-price-card {
+    margin-bottom: 0;
+  }
+
+  /* 剂数调节器 */
+  .dose-multiplier {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--card-border);
+    background: rgba(245,240,232,0.4);
+  }
+  .dm-label {
+    font-size: 0.8rem;
+    color: var(--ink-faint);
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .dm-label .dm-current {
+    color: var(--mahogany);
+    font-weight: 700;
+    font-size: 0.92rem;
+  }
+  .dm-buttons {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .dm-btn {
+    min-width: 38px;
+    height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius);
+    background: transparent;
+    font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'WenQuanYi Micro Hei', sans-serif;
+    font-size: 0.82rem;
+    color: var(--ink-light);
+    cursor: pointer;
+    transition: all 0.25s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .dm-btn:hover { border-color: var(--gold); background: var(--gold-faint); }
+  .dm-btn.active {
+    background: var(--mahogany);
+    border-color: var(--mahogany);
+    color: var(--rice-paper);
+  }
+  .dm-custom {
+    width: 52px;
+    height: 32px;
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius);
+    text-align: center;
+    font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'WenQuanYi Micro Hei', sans-serif;
+    font-size: 0.82rem;
+    color: var(--ink);
+    background: transparent;
+  }
+  .dm-custom:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 2px var(--gold-faint); }
+  .dm-unit { font-size: 0.78rem; color: var(--ink-faint); margin-left: 2px; }
+
+  /* 单剂价格行 */
+  .summary-row.single-dose {
+    padding-bottom: 6px;
+    border-bottom: 1px dashed var(--card-border);
+    margin-bottom: 6px;
+  }
+  .summary-row.single-dose .summary-label { color: var(--ink-faint); }
+  .summary-row.single-dose .summary-value { color: var(--ink-light); }
+
+  .prescription-footer {
+    padding: 18px 22px;
+    border-top: 2px solid var(--card-border);
+    background: rgba(245,240,232,0.6);
+  }
+  .summary-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+    font-size: 0.85rem;
+    color: var(--ink-light);
+  }
+  .summary-row.total {
+    margin: 8px -8px 0;
+    padding: 14px 8px 8px;
+    border-top: 2px solid var(--cinnabar);
+  }
+  .summary-row.total .summary-label {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--cinnabar-dark);
+    letter-spacing: 0.12em;
+  }
+  .summary-row.total .summary-value {
+    font-size: 1.8rem;
+    font-weight: 900;
+    color: var(--cinnabar);
+    font-family: 'STKaiti', 'KaiTi', '楷体', 'Kai', serif;
+  }
+
+  .action-bar { display: flex; gap: 10px; }
+  .action-bar .btn { flex: 1; justify-content: center; padding: 10px; }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%) translateY(100px);
+    padding: 12px 28px;
+    background: var(--ink);
+    color: var(--rice-paper);
+    font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'WenQuanYi Micro Hei', sans-serif;
+    font-size: 0.85rem;
+    border-radius: 24px;
+    letter-spacing: 0.1em;
+    z-index: 999;
+    transition: transform 0.4s ease;
+    pointer-events: none;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+
+  .watermark {
+    position: fixed;
+    bottom: 20px; right: 30px;
+    font-family: 'STKaiti', 'KaiTi', '楷体', 'Kai', serif;
+    font-size: 4rem;
+    color: var(--gold);
+    opacity: 0.04;
+    pointer-events: none;
+    z-index: 0;
+    letter-spacing: 0.2em;
+    writing-mode: vertical-rl;
+  }
+
+  @media (max-width: 960px) {
+    .main-container { grid-template-columns: 1fr; padding: 16px; }
+    .prescription-panel { position: static; }
+    header h1 { font-size: 1.8rem; }
+    .top-price-section { padding: 0 16px; margin-bottom: 16px; }
+    .big-price-card .bp-value { font-size: 2rem; }
+    .big-price-card { padding: 16px 18px; }
+  }
+  @media print {
+    body::before, .watermark, .left-panel .card:not(.prescription-card), .action-bar { display: none !important; }
+    .main-container { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header-ornament"></div>
+<header>
+  <h1>中药智能算价器</h1>
+  <div class="subtitle">拍 照 识 方 · 一 键 核 价</div>
+  <div class="header-line"></div>
+</header>
+
+<!-- 总价区域（页面最顶部） -->
+<div class="top-price-section">
+  <div class="big-price-card" id="bigPriceCard">
+    <div class="bp-label">处方总价</div>
+    <div class="bp-value" id="bigPriceValue">¥0.00</div>
+    <div class="bp-detail" id="bigPriceDetail">0 味 · 1 剂 · 单剂 ¥0.00</div>
+  </div>
+</div>
+
+<main class="main-container">
+  <section class="left-panel">
+    <!-- 上传识别区 -->
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">📷</span>
+        <h3>上传处方照片</h3>
+      </div>
+      <div class="card-body">
+        <div class="upload-zone" id="uploadZone">
+          <span class="upload-icon">📤</span>
+          <div class="upload-text">点击上传或拖拽处方照片</div>
+          <div class="upload-hint">支持 JPG、PNG、WEBP 格式</div>
+          <input type="file" id="fileInput" accept="image/*" onchange="handleFileSelect(event)">
+        </div>
+        <div class="image-preview" id="imagePreview">
+          <img id="previewImg" src="" alt="处方预览">
+          <div class="preview-actions">
+            <button class="btn ghost" onclick="removeImage()">🗑 移除</button>
+            <button class="btn primary" id="ocrBtn" onclick="startOCR()">🔍 识别文字</button>
+          </div>
+        </div>
+        <div class="ocr-progress" id="ocrProgress">
+          <div class="progress-text" id="progressText">正在加载识别引擎...</div>
+          <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 识别文本 + 解析 -->
+    <div class="card" id="ocrResultCard" style="display:none;">
+      <div class="card-header">
+        <span class="icon">📝</span>
+        <h3>识别结果</h3>
+      </div>
+      <div class="card-body">
+        <textarea class="ocr-text-area" id="ocrText" placeholder="识别到的文字会显示在这里，您也可以直接粘贴药方文字...">桂枝 10g
+白芍 10g
+生姜 10g
+大枣 12g
+甘草 6g
+柴胡 12g
+黄芩 10g
+半夏 10g
+人参 6g
+黄芪 15g
+当归 10g
+川芎 8g
+茯苓 12g
+白术 10g</textarea>
+        <div class="parse-actions">
+          <button class="btn primary" onclick="parseAndCalculate()">⚡ 解析并算价</button>
+          <button class="btn secondary" onclick="document.getElementById('ocrText').value=''">清空</button>
+          <span style="font-size:0.78rem;color:var(--ink-faint);margin-left:auto;align-self:center;">支持药名+剂量自动匹配</span>
+        </div>
+
+        <!-- 明显档位切换 -->
+        <div class="tier-switcher" id="tierSwitcher">
+          <span class="ts-label">价格档次</span>
+          <button class="tier-btn tier-base active" data-tier="0" title="按药价单原价计价" onclick="setTier(0)">原价</button>
+          <button class="tier-btn" data-tier="1" title="补齐至500元" onclick="setTier(1)">500档</button>
+          <button class="tier-btn" data-tier="2" title="补齐至600元" onclick="setTier(2)">600档</button>
+          <button class="tier-btn" data-tier="3" title="补齐至700元" onclick="setTier(3)">700档</button>
+        </div>
+
+        <div class="parse-preview" id="parsePreview" style="display:none;">
+          <div class="parse-preview-title">解析详情</div>
+          <table class="preview-table" id="previewTable"></table>
+          <div class="unmatched-box" id="unmatchedBox" style="display:none;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 药材库 -->
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">🌿</span>
+        <h3>药材库</h3>
+      </div>
+      <div class="card-body">
+        <div class="search-bar">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="searchInput" placeholder="搜索药材名称、别名或功效..." oninput="filterHerbs()">
+        </div>
+        <div class="category-tabs" id="categoryTabs"></div>
+        <div class="herb-grid" id="herbGrid"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 右侧处方面板 -->
+  <aside class="prescription-panel">
+    <div class="prescription-card">
+      <div class="prescription-header">
+        <span class="prescription-title">当前处方</span>
+        <span class="prescription-count" id="prescriptionCount">0 味</span>
+      </div>
+
+      <!-- 剂数调节器 -->
+      <div class="dose-multiplier">
+        <div class="dm-label">
+          <span>服用剂数</span>
+          <span class="dm-current" id="dmCurrent">1 剂</span>
+        </div>
+        <div class="dm-buttons">
+          <button class="dm-btn active" onclick="setDoseCount(1)">1剂</button>
+          <button class="dm-btn" onclick="setDoseCount(3)">3剂</button>
+          <button class="dm-btn" onclick="setDoseCount(5)">5剂</button>
+          <button class="dm-btn" onclick="setDoseCount(7)">7剂</button>
+          <button class="dm-btn" onclick="setDoseCount(10)">10剂</button>
+          <button class="dm-btn" onclick="setDoseCount(14)">14剂</button>
+          <input type="number" class="dm-custom" id="dmCustom" min="1" max="90" value="1" onchange="setDoseCount(parseInt(this.value)||1)" title="自定义剂数">
+          <span class="dm-unit">剂</span>
+        </div>
+      </div>
+
+      <div class="selected-list" id="selectedList">
+        <div class="empty-msg">上传处方照片或从左侧选取药材</div>
+      </div>
+      <div class="prescription-footer">
+        <div class="summary-row">
+          <span class="summary-label">味数</span>
+          <span class="summary-value" id="totalCount">0 味</span>
+        </div>
+        <div class="summary-row">
+          <span class="summary-label">单剂克重</span>
+          <span class="summary-value" id="totalWeight">0 g</span>
+        </div>
+        <div class="summary-row single-dose">
+          <span class="summary-label">单剂价格</span>
+          <span class="summary-value" id="singleDosePrice">¥0.00</span>
+        </div>
+        <div class="summary-row">
+          <span class="summary-label">服用剂数</span>
+          <span class="summary-value" id="doseCountDisplay">1 剂</span>
+        </div>
+        <div class="summary-row total">
+          <span class="summary-label">合计</span>
+          <span class="summary-value" id="totalPrice">¥0.00</span>
+        </div>
+      </div>
+    </div>
+    <div class="action-bar">
+      <button class="btn secondary" onclick="clearPrescription()">清空</button>
+      <button class="btn primary" onclick="exportPrescription()">导出清单</button>
+    </div>
+  </aside>
+</main>
+
+<div class="watermark">悬壶济世</div>
+<div class="toast" id="toast"></div>
+
+<script>
+// ===================== 药材数据库（真实药价·伤寒金匮）=====================
+const herbDatabase = [
+  { id: 1, name: '桂枝', alias: '桂枝', category: '解表类', price: 0.033, unit: 'g', effect: '' },
+  { id: 2, name: '麻黄', alias: '麻黄', category: '解表类', price: 0.058, unit: 'g', effect: '' },
+  { id: 3, name: '葛根', alias: '葛根', category: '解表类', price: 0.039, unit: 'g', effect: '' },
+  { id: 4, name: '柴胡', alias: '柴胡', category: '解表类', price: 0.286, unit: 'g', effect: '' },
+  { id: 5, name: '生姜', alias: '生姜', category: '解表类', price: 0.019, unit: 'g', effect: '' },
+  { id: 6, name: '防风', alias: '防风', category: '解表类', price: 0.052, unit: 'g', effect: '' },
+  { id: 7, name: '升麻', alias: '升麻', category: '解表类', price: 0.104, unit: 'g', effect: '' },
+  { id: 8, name: '葱白', alias: '葱白', category: '解表类', price: 0.007, unit: 'g', effect: '' },
+  { id: 9, name: '香豉', alias: '香豉', category: '解表类', price: 0.033, unit: 'g', effect: '' },
+  { id: 10, name: '细辛', alias: '细辛', category: '解表类', price: 0.78, unit: 'g', effect: '' },
+  { id: 11, name: '菊花', alias: '菊花', category: '解表类', price: 0.104, unit: 'g', effect: '' },
+  { id: 12, name: '石膏', alias: '石膏', category: '清热类', price: 0.019, unit: 'g', effect: '' },
+  { id: 13, name: '知母', alias: '知母', category: '清热类', price: 0.052, unit: 'g', effect: '' },
+  { id: 14, name: '黄芩', alias: '黄芩', category: '清热类', price: 0.085, unit: 'g', effect: '' },
+  { id: 15, name: '黄连', alias: '黄连', category: '清热类', price: 0.78, unit: 'g', effect: '' },
+  { id: 16, name: '黄柏', alias: '黄柏', category: '清热类', price: 0.078, unit: 'g', effect: '' },
+  { id: 17, name: '栀子', alias: '栀子', category: '清热类', price: 0.078, unit: 'g', effect: '' },
+  { id: 18, name: '连翘', alias: '连翘', category: '清热类', price: 0.13, unit: 'g', effect: '' },
+  { id: 19, name: '秦皮', alias: '秦皮', category: '清热类', price: 0.039, unit: 'g', effect: '' },
+  { id: 20, name: '白头翁', alias: '白头翁', category: '清热类', price: 0.117, unit: 'g', effect: '' },
+  { id: 21, name: '生地', alias: '生地', category: '清热类', price: 0.052, unit: 'g', effect: '' },
+  { id: 22, name: '牡丹皮', alias: '牡丹皮', category: '清热类', price: 0.156, unit: 'g', effect: '' },
+  { id: 23, name: '竹叶', alias: '竹叶', category: '清热类', price: 0.033, unit: 'g', effect: '' },
+  { id: 24, name: '苦参', alias: '苦参', category: '清热类', price: 0.039, unit: 'g', effect: '' },
+  { id: 25, name: '白薇', alias: '白薇', category: '清热类', price: 0.065, unit: 'g', effect: '' },
+  { id: 26, name: '紫草', alias: '紫草', category: '清热类', price: 0.104, unit: 'g', effect: '' },
+  { id: 27, name: '文蛤', alias: '文蛤', category: '清热类', price: 0.005, unit: 'g', effect: '' },
+  { id: 28, name: '硝石', alias: '硝石', category: '清热类', price: 0.007, unit: 'g', effect: '' },
+  { id: 29, name: '大黄', alias: '大黄', category: '泻下类', price: 0.052, unit: 'g', effect: '' },
+  { id: 30, name: '芒硝', alias: '芒硝', category: '泻下类', price: 0.019, unit: 'g', effect: '' },
+  { id: 31, name: '巴豆', alias: '巴豆', category: '泻下类', price: 0.029, unit: 'g', effect: '' },
+  { id: 32, name: '甘遂', alias: '甘遂', category: '泻下类', price: 0.117, unit: 'g', effect: '' },
+  { id: 33, name: '芫花', alias: '芫花', category: '泻下类', price: 0.078, unit: 'g', effect: '' },
+  { id: 34, name: '大戟', alias: '大戟', category: '泻下类', price: 0.104, unit: 'g', effect: '' },
+  { id: 35, name: '商陆', alias: '商陆', category: '泻下类', price: 0.033, unit: 'g', effect: '' },
+  { id: 36, name: '麻仁', alias: '麻仁', category: '泻下类', price: 0.046, unit: 'g', effect: '' },
+  { id: 37, name: '附子', alias: '附子', category: '温里类', price: 0.286, unit: 'g', effect: '' },
+  { id: 38, name: '乌头', alias: '乌头', category: '温里类', price: 0.234, unit: 'g', effect: '' },
+  { id: 39, name: '天雄', alias: '天雄', category: '温里类', price: 0.182, unit: 'g', effect: '' },
+  { id: 40, name: '干姜', alias: '干姜', category: '温里类', price: 0.052, unit: 'g', effect: '' },
+  { id: 41, name: '吴茱萸', alias: '吴茱萸', category: '温里类', price: 0.085, unit: 'g', effect: '' },
+  { id: 42, name: '蜀椒', alias: '花椒', category: '温里类', price: 0.117, unit: 'g', effect: '' },
+  { id: 43, name: '防己', alias: '防己', category: '祛风湿类', price: 0.338, unit: 'g', effect: '' },
+  { id: 44, name: '薏苡仁', alias: '薏苡仁', category: '祛风湿类', price: 0.033, unit: 'g', effect: '' },
+  { id: 45, name: '茯苓', alias: '茯苓', category: '祛湿利水类', price: 0.052, unit: 'g', effect: '' },
+  { id: 46, name: '猪苓', alias: '猪苓', category: '祛湿利水类', price: 0.26, unit: 'g', effect: '' },
+  { id: 47, name: '泽泻', alias: '泽泻', category: '祛湿利水类', price: 0.046, unit: 'g', effect: '' },
+  { id: 48, name: '滑石', alias: '滑石', category: '祛湿利水类', price: 0.016, unit: 'g', effect: '' },
+  { id: 49, name: '茵陈', alias: '茵陈', category: '祛湿利水类', price: 0.033, unit: 'g', effect: '' },
+  { id: 50, name: '赤小豆', alias: '赤小豆', category: '祛湿利水类', price: 0.026, unit: 'g', effect: '' },
+  { id: 51, name: '通草', alias: '通草', category: '祛湿利水类', price: 0.585, unit: 'g', effect: '' },
+  { id: 52, name: '瞿麦', alias: '瞿麦', category: '祛湿利水类', price: 0.026, unit: 'g', effect: '' },
+  { id: 53, name: '葶苈子', alias: '葶苈子', category: '祛湿利水类', price: 0.029, unit: 'g', effect: '' },
+  { id: 54, name: '冬瓜子', alias: '冬瓜子', category: '祛湿利水类', price: 0.104, unit: 'g', effect: '' },
+  { id: 55, name: '败酱', alias: '败酱', category: '祛湿利水类', price: 0.029, unit: 'g', effect: '' },
+  { id: 56, name: '厚朴', alias: '厚朴', category: '理气类', price: 0.052, unit: 'g', effect: '' },
+  { id: 57, name: '枳实', alias: '枳实', category: '理气类', price: 0.104, unit: 'g', effect: '' },
+  { id: 58, name: '橘皮', alias: '陈皮', category: '理气类', price: 0.033, unit: 'g', effect: '' },
+  { id: 59, name: '薤白', alias: '薤白', category: '理气类', price: 0.065, unit: 'g', effect: '' },
+  { id: 60, name: '香附', alias: '香附', category: '理气类', price: 0.033, unit: 'g', effect: '' },
+  { id: 61, name: '枳壳', alias: '枳壳', category: '理气类', price: 0.042, unit: 'g', effect: '' },
+  { id: 62, name: '桃仁', alias: '桃仁', category: '活血化瘀类', price: 0.111, unit: 'g', effect: '' },
+  { id: 63, name: '川芎', alias: '川芎', category: '活血化瘀类', price: 0.072, unit: 'g', effect: '' },
+  { id: 64, name: '水蛭', alias: '水蛭', category: '活血化瘀类', price: 2.86, unit: 'g', effect: '' },
+  { id: 65, name: '虻虫', alias: '虻虫', category: '活血化瘀类', price: 0.715, unit: 'g', effect: '' },
+  { id: 66, name: '庶虫', alias: '土鳖虫', category: '活血化瘀类', price: 0.111, unit: 'g', effect: '' },
+  { id: 67, name: '王不留行', alias: '王不留行', category: '活血化瘀类', price: 0.026, unit: 'g', effect: '' },
+  { id: 68, name: '侧柏叶', alias: '侧柏叶', category: '止血类', price: 0.023, unit: 'g', effect: '' },
+  { id: 69, name: '艾叶', alias: '艾叶', category: '止血类', price: 0.033, unit: 'g', effect: '' },
+  { id: 70, name: '柏叶', alias: '柏叶', category: '止血类', price: 0.023, unit: 'g', effect: '' },
+  { id: 71, name: '蒲黄', alias: '蒲黄', category: '止血类', price: 0.085, unit: 'g', effect: '' },
+  { id: 72, name: '茜草', alias: '茜草', category: '止血类', price: 0.091, unit: 'g', effect: '' },
+  { id: 73, name: '白及', alias: '白及', category: '止血类', price: 0.156, unit: 'g', effect: '' },
+  { id: 74, name: '半夏', alias: '半夏', category: '化痰止咳类', price: 0.195, unit: 'g', effect: '' },
+  { id: 75, name: '杏仁', alias: '杏仁', category: '化痰止咳类', price: 0.072, unit: 'g', effect: '' },
+  { id: 76, name: '桔梗', alias: '桔梗', category: '化痰止咳类', price: 0.104, unit: 'g', effect: '' },
+  { id: 77, name: '贝母', alias: '贝母', category: '化痰止咳类', price: 0.156, unit: 'g', effect: '' },
+  { id: 78, name: '瓜蒌根', alias: '天花粉', category: '化痰止咳类', price: 0.065, unit: 'g', effect: '' },
+  { id: 79, name: '瓜蒌实', alias: '瓜蒌实', category: '化痰止咳类', price: 0.058, unit: 'g', effect: '' },
+  { id: 80, name: '旋覆花', alias: '旋覆花', category: '化痰止咳类', price: 0.098, unit: 'g', effect: '' },
+  { id: 81, name: '紫菀', alias: '紫菀', category: '化痰止咳类', price: 0.072, unit: 'g', effect: '' },
+  { id: 82, name: '款冬花', alias: '款冬花', category: '化痰止咳类', price: 0.234, unit: 'g', effect: '' },
+  { id: 83, name: '皂荚', alias: '皂荚', category: '化痰止咳类', price: 0.039, unit: 'g', effect: '' },
+  { id: 84, name: '竹茹', alias: '竹茹', category: '化痰止咳类', price: 0.033, unit: 'g', effect: '' },
+  { id: 85, name: '桑白皮', alias: '桑白皮', category: '化痰止咳类', price: 0.052, unit: 'g', effect: '' },
+  { id: 86, name: '蜀漆', alias: '常山', category: '化痰止咳类', price: 0.033, unit: 'g', effect: '' },
+  { id: 87, name: '龙骨', alias: '龙骨', category: '安神类', price: 0.416, unit: 'g', effect: '' },
+  { id: 88, name: '牡蛎', alias: '牡蛎', category: '安神类', price: 0.023, unit: 'g', effect: '' },
+  { id: 89, name: '酸枣仁', alias: '酸枣仁', category: '安神类', price: 1.235, unit: 'g', effect: '' },
+  { id: 90, name: '远志', alias: '远志', category: '安神类', price: 0.26, unit: 'g', effect: '' },
+  { id: 91, name: '朱砂', alias: '朱砂', category: '安神类', price: 0.624, unit: 'g', effect: '' },
+  { id: 92, name: '紫石英', alias: '紫石英', category: '安神类', price: 0.033, unit: 'g', effect: '' },
+  { id: 93, name: '代赭石', alias: '代赭石', category: '平肝息风类', price: 0.026, unit: 'g', effect: '' },
+  { id: 94, name: '蒺藜', alias: '蒺藜', category: '平肝息风类', price: 0.052, unit: 'g', effect: '' },
+  { id: 95, name: '人参', alias: '人参', category: '补益类', price: 1.56, unit: 'g', effect: '' },
+  { id: 96, name: '黄芪', alias: '黄芪', category: '补益类', price: 0.13, unit: 'g', effect: '' },
+  { id: 97, name: '甘草', alias: '甘草', category: '补益类', price: 0.052, unit: 'g', effect: '' },
+  { id: 98, name: '大枣', alias: '大枣', category: '补益类', price: 0.046, unit: 'g', effect: '' },
+  { id: 99, name: '白芍', alias: '白芍', category: '补益类', price: 0.13, unit: 'g', effect: '' },
+  { id: 100, name: '当归', alias: '当归', category: '补益类', price: 0.13, unit: 'g', effect: '' },
+  { id: 101, name: '阿胶', alias: '阿胶', category: '补益类', price: 3.9, unit: 'g', effect: '' },
+  { id: 102, name: '麦冬', alias: '麦冬', category: '补益类', price: 0.195, unit: 'g', effect: '' },
+  { id: 103, name: '天冬', alias: '天冬', category: '补益类', price: 0.104, unit: 'g', effect: '' },
+  { id: 104, name: '百合', alias: '百合', category: '补益类', price: 0.156, unit: 'g', effect: '' },
+  { id: 105, name: '山药', alias: '山药', category: '补益类', price: 0.052, unit: 'g', effect: '' },
+  { id: 135, name: '白术', alias: '于术,冬术,浙术', category: '补益类', price: 0.052, unit: 'g', effect: '健脾燥湿' },
+  { id: 106, name: '地黄', alias: '鲜/干', category: '补益类', price: 0.052, unit: 'g', effect: '' },
+  { id: 107, name: '枸杞子', alias: '枸杞子', category: '补益类', price: 0.13, unit: 'g', effect: '' },
+  { id: 108, name: '杜仲', alias: '杜仲', category: '补益类', price: 0.052, unit: 'g', effect: '' },
+  { id: 109, name: '续断', alias: '续断', category: '补益类', price: 0.058, unit: 'g', effect: '' },
+  { id: 110, name: '龟甲', alias: '龟甲', category: '补益类', price: 0.26, unit: 'g', effect: '' },
+  { id: 111, name: '鳖甲', alias: '鳖甲', category: '补益类', price: 0.325, unit: 'g', effect: '' },
+  { id: 112, name: '胶饴', alias: '饴糖', category: '补益类', price: 0.026, unit: 'g', effect: '' },
+  { id: 113, name: '白蜜', alias: '白蜜', category: '补益类', price: 0.085, unit: 'g', effect: '' },
+  { id: 114, name: '石斛', alias: '石斛', category: '补益类', price: 0.156, unit: 'g', effect: '' },
+  { id: 115, name: '女贞子', alias: '女贞子', category: '补益类', price: 0.026, unit: 'g', effect: '' },
+  { id: 116, name: '旱莲草', alias: '旱莲草', category: '补益类', price: 0.029, unit: 'g', effect: '' },
+  { id: 117, name: '肉苁蓉', alias: '肉苁蓉', category: '补益类', price: 0.169, unit: 'g', effect: '' },
+  { id: 118, name: '巴戟天', alias: '巴戟天', category: '补益类', price: 0.156, unit: 'g', effect: '' },
+  { id: 119, name: '菟丝子', alias: '菟丝子', category: '补益类', price: 0.058, unit: 'g', effect: '' },
+  { id: 120, name: '五味子', alias: '五味子', category: '收涩类', price: 0.098, unit: 'g', effect: '' },
+  { id: 121, name: '乌梅', alias: '乌梅', category: '收涩类', price: 0.072, unit: 'g', effect: '' },
+  { id: 122, name: '赤石脂', alias: '赤石脂', category: '收涩类', price: 0.023, unit: 'g', effect: '' },
+  { id: 123, name: '诃黎勒', alias: '诃子', category: '收涩类', price: 0.039, unit: 'g', effect: '' },
+  { id: 124, name: '禹余粮', alias: '禹余粮', category: '收涩类', price: 0.005, unit: 'g', effect: '' },
+  { id: 125, name: '芡实', alias: '芡实', category: '收涩类', price: 0.072, unit: 'g', effect: '' },
+  { id: 126, name: '海藻', alias: '海藻', category: '软坚散结类', price: 0.052, unit: 'g', effect: '' },
+  { id: 127, name: '雄黄', alias: '雄黄', category: '驱虫/外用类', price: 0.062, unit: 'g', effect: '' },
+  { id: 128, name: '矾石', alias: '白矾', category: '外用类', price: 0.019, unit: 'g', effect: '' },
+  { id: 129, name: '蜂窠', alias: '露蜂房', category: '外用类', price: 1.04, unit: 'g', effect: '' },
+  { id: 130, name: '蛇床子', alias: '蛇床子', category: '外用类', price: 0.046, unit: 'g', effect: '' },
+  { id: 131, name: '粳米', alias: '粳米', category: '辅料类', price: 0.016, unit: 'g', effect: '' },
+  { id: 132, name: '小麦', alias: '小麦', category: '辅料类', price: 0.013, unit: 'g', effect: '' },
+  { id: 133, name: '大麦', alias: '大麦', category: '辅料类', price: 0.013, unit: 'g', effect: '' },
+  { id: 134, name: '米粉', alias: '米粉', category: '辅料类', price: 0.016, unit: 'g', effect: '' },
+];
+
+// 低于1角的统一按1角算
+herbDatabase.forEach(h => {
+  if (h.price < 0.1) h.price = 0.1;
+});
+
+// ===================== 状态管理 =====================
+let selectedHerbs = [];
+let currentCategory = '全部';
+let parsedResults = []; // 解析预览暂存
+let currentImageFile = null;
+let currentTier = 0; // 默认原价档（不加调价款）
+const ADJUSTMENT_ID = -1; // 调价款虚拟ID
+const FALLBACK_ID = -2; // 兜底价虚拟ID
+let doseCount = 1; // 服用剂数
+
+// ===================== 初始化 =====================
+function init() {
+  renderCategoryTabs();
+  renderHerbGrid();
+  setupDragDrop();
+}
+
+// ===================== 上传 & OCR =====================
+function setupDragDrop() {
+  const zone = document.getElementById('uploadZone');
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.classList.remove('dragover');
+    const files = e.dataTransfer.files;
+    if (files.length) handleFile(files[0]);
+  });
+}
+
+function handleFileSelect(e) {
+  if (e.target.files.length) handleFile(e.target.files[0]);
+}
+
+function handleFile(file) {
+  if (!file.type.startsWith('image/')) {
+    showToast('请上传图片文件');
+    return;
+  }
+  currentImageFile = file;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    document.getElementById('previewImg').src = ev.target.result;
+    document.getElementById('uploadZone').style.display = 'none';
+    document.getElementById('imagePreview').style.display = 'block';
+    document.getElementById('ocrResultCard').style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+}
+
+function removeImage() {
+  currentImageFile = null;
+  document.getElementById('previewImg').src = '';
+  document.getElementById('uploadZone').style.display = 'block';
+  document.getElementById('imagePreview').style.display = 'none';
+  document.getElementById('fileInput').value = '';
+}
+
+async function startOCR() {
+  if (!currentImageFile) return;
+  const btn = document.getElementById('ocrBtn');
+  const progress = document.getElementById('ocrProgress');
+  const fill = document.getElementById('progressFill');
+  const text = document.getElementById('progressText');
+
+  btn.disabled = true;
+  progress.classList.add('active');
+  text.textContent = '正在加载中文识别模型（首次使用需下载，约10MB）...';
+  fill.style.width = '10%';
+
+  try {
+    const worker = await Tesseract.createWorker('chi_sim', 1, {
+      logger: m => {
+        if (m.status === 'recognizing text') {
+          const pct = Math.round(m.progress * 90) + 10;
+          fill.style.width = pct + '%';
+          text.textContent = `正在识别文字... ${Math.round(m.progress * 100)}%`;
+        } else if (m.status === 'loading language traineddata') {
+          fill.style.width = '5%';
+          text.textContent = '正在加载中文训练数据...';
+        }
+      }
+    });
+
+    fill.style.width = '95%';
+    text.textContent = '正在解析结果...';
+    const result = await worker.recognize(currentImageFile);
+    await worker.terminate();
+
+    document.getElementById('ocrText').value = result.data.text;
+    fill.style.width = '100%';
+    text.textContent = '识别完成！';
+    showToast('处方文字识别成功');
+
+    // 自动解析
+    setTimeout(() => {
+      parseAndCalculate();
+      progress.classList.remove('active');
+    }, 600);
+
+  } catch (err) {
+    console.error(err);
+    text.textContent = '识别失败，已按默认价兜底出价';
+    // 兜底：OCR异常时直接按默认价出价
+    applyFallbackPricing('OCR识别异常');
+    progress.classList.remove('active');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ===================== 解析药方文字 =====================
+// 兜底：识别失败时，用默认单剂价格（50~60元随机）按剂数出价
+function applyFallbackPricing(reason) {
+  // 单剂基准 50~60 元随机
+  const baseMin = 50;
+  const baseMax = 60;
+  const singleBase = +(baseMin + Math.random() * (baseMax - baseMin)).toFixed(2);
+  // 清空已有药材，只放一个兜底虚拟项
+  selectedHerbs = [{
+    id: FALLBACK_ID,
+    name: '默认处方',
+    alias: reason || '识别失败',
+    category: '其他',
+    price: singleBase,
+    unit: '剂',
+    effect: '兜底计价',
+    dose: 1
+  }];
+  // 兜底价不受档位影响，重置为原价档
+  currentTier = 0;
+  document.querySelectorAll('.tier-btn').forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.tier) === 0);
+  });
+  renderHerbGrid();
+  renderSelectedList();
+  updateSummary();
+  const total = (singleBase * doseCount).toFixed(2);
+  showToast(`识别失败，已按默认价 单剂¥${singleBase} × ${doseCount}剂 = ¥${total}`);
+}
+
+function parseAndCalculate() {
+  const text = document.getElementById('ocrText').value.trim();
+  if (!text) { showToast('请输入或识别药方文字'); return; }
+
+  const lines = text.split(/[\n\r]+/).map(l => l.trim()).filter(l => l);
+  parsedResults = [];
+  const unmatched = [];
+
+  for (const line of lines) {
+    const result = parseLine(line);
+    if (result && result.herb) {
+      parsedResults.push(result);
+    } else if (line.length >= 2 && !/^\d+$/.test(line)) {
+      unmatched.push(line);
+    }
+  }
+
+  const matched = parsedResults.filter(r => r.herb);
+  if (matched.length === 0) {
+    // 兜底：没识别到药材，直接按默认价出价
+    applyFallbackPricing('未识别到药材');
+    renderParsePreview(unmatched);
+    return;
+  }
+
+  // 直接加入处方（无需预览确认）
+  for (const r of matched) {
+    const existing = selectedHerbs.find(s => s.id === r.herb.id);
+    if (existing) {
+      existing.dose = Math.min(200, existing.dose + r.dose);
+    } else {
+      selectedHerbs.push({ ...r.herb, dose: r.dose });
+    }
+  }
+
+  renderHerbGrid();
+  renderSelectedList();
+  updateSummary();
+
+  if (unmatched.length > 0) {
+    showToast(`已识别 ${matched.length} 味药材，${unmatched.length} 行未识别`);
+  } else {
+    showToast(`成功识别 ${matched.length} 味药材，共 ¥${selectedHerbs.reduce((s,h) => s + h.price * h.dose, 0).toFixed(2)}`);
+  }
+}
+
+// 解析单行：药材名 + 剂量
+function parseLine(line) {
+  // 清洗常见噪声字符
+  let cleaned = line.replace(/[\s\t]+/g, ' ').trim();
+
+  // 尝试匹配：药名 剂量 或 药名：剂量
+  // 模式1: 药材名 + 空格/冒号 + 数字 + 单位
+  const dosePattern = /(\d+\.?\d*)\s*(g|克|钱|两|分|grams?|gm?)/i;
+  const match = cleaned.match(dosePattern);
+
+  let doseVal = null;
+  let doseUnit = 'g';
+  let herbPart = cleaned;
+
+  if (match) {
+    doseVal = parseFloat(match[1]);
+    doseUnit = match[2].toLowerCase();
+    herbPart = cleaned.substring(0, match.index).trim();
+    // 去掉末尾的冒号、空格等
+    herbPart = herbPart.replace(/[：:;；,，.。]+$/g, '').trim();
+  } else {
+    // 模式2: 纯数字作为剂量（如"当归 12"）
+    const numMatch = cleaned.match(/^(.*?)\s+(\d+\.?\d*)\s*$/);
+    if (numMatch) {
+      herbPart = numMatch[1].trim();
+      doseVal = parseFloat(numMatch[2]);
+    }
+  }
+
+  if (!herbPart || herbPart.length < 2) return null;
+
+  // 单位换算为克
+  let doseInGrams = doseVal;
+  if (doseUnit === '钱') doseInGrams = doseVal * 3;
+  else if (doseUnit === '两') doseInGrams = doseVal * 30;
+  else if (doseUnit === '分') doseInGrams = doseVal * 0.3;
+
+  if (doseInGrams === null || isNaN(doseInGrams)) {
+    // 无剂量，默认10克
+    doseInGrams = 10;
+  }
+  doseInGrams = Math.round(doseInGrams);
+  if (doseInGrams < 1) doseInGrams = 1;
+  if (doseInGrams > 200) doseInGrams = 200;
+
+  const herb = findHerb(herbPart);
+  if (!herb) {
+    return { raw: line, herb: null, matchedName: herbPart, dose: doseInGrams };
+  }
+
+  return { raw: line, herb, matchedName: herbPart, dose: doseInGrams };
+}
+
+// 智能药材匹配
+function findHerb(query) {
+  const q = query.trim();
+  if (!q || q.length < 2) return null;
+
+  // 1. 精确匹配名称
+  let match = herbDatabase.find(h => h.name === q);
+  if (match) return match;
+
+  // 2. 精确匹配别名
+  match = herbDatabase.find(h => {
+    const aliases = h.alias.split(',').map(a => a.trim());
+    return aliases.includes(q);
+  });
+  if (match) return match;
+
+  // 3. 去掉常见炮制前缀后再匹配
+  const prefixes = ['生', '熟', '炙', '炒', '煅', '醋', '酒', '盐', '姜', '蜜', '制', '焦', '炭', '煅', '煨', '蒸'];
+  let cleanQ = q;
+  for (const p of prefixes) {
+    if (cleanQ.startsWith(p)) {
+      cleanQ = cleanQ.slice(p.length);
+      break;
+    }
+  }
+  match = herbDatabase.find(h => h.name === cleanQ || h.alias.split(',').map(a => a.trim()).includes(cleanQ));
+  if (match) return match;
+
+  // 4. 去掉常见后缀（片/段/末/粉/炭）再匹配
+  const suffixes = ['片', '段', '末', '粉', '炭', '块', '丝', '皮', '仁', '子', '壳', '花', '叶', '根', '草'];
+  cleanQ = q;
+  for (const s of suffixes) {
+    if (cleanQ.endsWith(s) && cleanQ.length > s.length + 1) {
+      cleanQ = cleanQ.slice(0, -s.length);
+      match = herbDatabase.find(h => h.name === cleanQ || h.alias.split(',').map(a => a.trim()).includes(cleanQ));
+      if (match) return match;
+    }
+  }
+
+  // 5. 包含匹配（药材名包含查询词 或 查询词包含药材名）
+  match = herbDatabase.find(h => h.name.includes(q) || q.includes(h.name));
+  if (match) return match;
+
+  // 6. 别名包含匹配
+  match = herbDatabase.find(h => {
+    return h.alias.split(',').some(a => a.trim().includes(q) || q.includes(a.trim()));
+  });
+  if (match) return match;
+
+  // 7. OCR乱码容错：单字匹配（取药材名和查询词共有的汉字）
+  // 提取查询词中的汉字
+  const qChars = q.split('').filter(c => /[\u4e00-\u9fff]/.test(c));
+  if (qChars.length >= 2) {
+    let bestScore = 0;
+    let bestHerb = null;
+    for (const h of herbDatabase) {
+      const hChars = h.name.split('');
+      let score = 0;
+      for (const c of qChars) {
+        if (hChars.includes(c)) score++;
+      }
+      // 重叠字数越多得分越高，且至少占药材名一半以上
+      if (score > bestScore && score >= Math.ceil(hChars.length / 2)) {
+        bestScore = score;
+        bestHerb = h;
+      }
+    }
+    if (bestHerb) return bestHerb;
+  }
+
+  // 8. 首字匹配（OCR乱码时可能只认对第一个字）
+  const firstChar = qChars[0];
+  if (firstChar) {
+    match = herbDatabase.find(h => h.name.startsWith(firstChar));
+    if (match) return match;
+  }
+
+  return null;
+}
+
+// 渲染解析预览
+function renderParsePreview(unmatched) {
+  const preview = document.getElementById('parsePreview');
+  const table = document.getElementById('previewTable');
+  const umBox = document.getElementById('unmatchedBox');
+
+  if (parsedResults.length === 0 && unmatched.length === 0) {
+    showToast('未能识别到任何药材，请检查输入');
+    preview.style.display = 'none';
+    return;
+  }
+
+  const matched = parsedResults.filter(r => r.herb);
+
+  let html = `<thead><tr>
+    <th>状态</th><th>识别文字</th><th>匹配药材</th><th>剂量</th><th>单价</th><th>小计</th>
+  </tr></thead><tbody>`;
+
+  for (const r of parsedResults) {
+    if (!r.herb) continue;
+    const subtotal = (r.herb.price * r.dose).toFixed(2);
+    html += `<tr>
+      <td><div class="herb-cell"><span class="status-dot ok"></span></div></td>
+      <td>${escapeHtml(r.raw)}</td>
+      <td><strong>${r.herb.name}</strong> <span style="color:var(--ink-faint);font-size:0.75rem;">${r.matchedName !== r.herb.name ? '('+r.matchedName+')' : ''}</span></td>
+      <td class="input-cell"><input type="number" value="${r.dose}" min="1" max="200" onchange="updateParsedDose(${parsedResults.indexOf(r)},this.value)"></td>
+      <td>¥${r.herb.price < 0.1 ? r.herb.price.toFixed(3) : r.herb.price.toFixed(2)}/g</td>
+      <td class="price-cell">¥${subtotal}</td>
+    </tr>`;
+  }
+
+  // 未匹配的行
+  for (const r of parsedResults) {
+    if (r.herb) continue;
+    html += `<tr>
+      <td><div class="herb-cell"><span class="status-dot err"></span></div></td>
+      <td>${escapeHtml(r.raw)}</td>
+      <td colspan="4" style="color:var(--cinnabar);font-size:0.82rem;">未匹配到药材，请手动添加</td>
+    </tr>`;
+  }
+
+  html += '</tbody>';
+  table.innerHTML = html;
+
+  if (unmatched.length > 0) {
+    umBox.style.display = 'block';
+    umBox.innerHTML = `<div class="um-title">⚠ 以下文字未能识别为药材：</div>${escapeHtml(unmatched.join('、'))}`;
+  } else {
+    umBox.style.display = 'none';
+  }
+
+  preview.style.display = 'block';
+}
+
+function updateParsedDose(idx, val) {
+  if (parsedResults[idx]) {
+    parsedResults[idx].dose = Math.max(1, Math.min(200, parseInt(val) || 1));
+    // 重新渲染表格（简化：只重渲染）
+    const unmatched = [];
+    renderParsePreview(unmatched);
+  }
+}
+
+function escapeHtml(str) {
+  return str.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m]));
+}
+
+// ===================== 药材库浏览 =====================
+function renderCategoryTabs() {
+  const categories = ['全部', ...new Set(herbDatabase.map(h => h.category))];
+  const container = document.getElementById('categoryTabs');
+  container.innerHTML = categories.map(cat =>
+    `<button class="cat-tab ${cat === currentCategory ? 'active' : ''}" onclick="setCategory('${cat}')">${cat}</button>`
+  ).join('');
+}
+
+function setCategory(cat) {
+  currentCategory = cat;
+  renderCategoryTabs();
+  renderHerbGrid();
+}
+
+function renderHerbGrid() {
+  const searchTerm = (document.getElementById('searchInput').value || '').toLowerCase();
+  const grid = document.getElementById('herbGrid');
+
+  let filtered = herbDatabase.filter(h => {
+    const matchCat = currentCategory === '全部' || h.category === currentCategory;
+    const matchSearch = !searchTerm ||
+      h.name.includes(searchTerm) ||
+      h.alias.toLowerCase().includes(searchTerm) ||
+      h.effect.includes(searchTerm) ||
+      h.category.includes(searchTerm);
+    return matchCat && matchSearch;
+  });
+
+  grid.innerHTML = filtered.map((herb, i) => {
+    const isSelected = selectedHerbs.find(s => s.id === herb.id);
+    return `
+      <div class="herb-card ${isSelected ? 'added' : ''}" style="animation-delay: ${i * 0.02}s">
+        <div class="herb-info">
+          <div class="herb-name">${herb.name}<span class="alias">${herb.alias.split(',')[0]}</span></div>
+          <div class="herb-meta">${herb.category} · ${herb.effect}</div>
+        </div>
+        <span class="herb-price">¥${herb.price < 0.1 ? herb.price.toFixed(3) : herb.price.toFixed(2)}<span class="unit">/g</span></span>
+        <button class="add-btn ${isSelected ? 'added' : ''}" onclick="toggleHerb(${herb.id})">${isSelected ? '✓' : '+'}</button>
+      </div>
+    `;
+  }).join('');
+}
+
+function filterHerbs() { renderHerbGrid(); }
+
+function toggleHerb(id) {
+  const idx = selectedHerbs.findIndex(s => s.id === id);
+  if (idx > -1) {
+    selectedHerbs.splice(idx, 1);
+    showToast('已移除药材');
+  } else {
+    const herb = herbDatabase.find(h => h.id === id);
+    selectedHerbs.push({ ...herb, dose: 10 });
+    showToast(`已添加 ${herb.name}`);
+  }
+  renderHerbGrid();
+  renderSelectedList();
+  updateSummary();
+}
+
+// ===================== 处方清单 =====================
+function renderSelectedList() {
+  const container = document.getElementById('selectedList');
+  if (selectedHerbs.length === 0) {
+    container.innerHTML = '<div class="empty-msg">上传处方照片或从左侧选取药材</div>';
+    return;
+  }
+  container.innerHTML = selectedHerbs.map(item => {
+    const isAdj = item.id === ADJUSTMENT_ID;
+    const isFallback = item.id === FALLBACK_ID;
+    const isVirtual = isAdj || isFallback;
+    return `
+    <div class="selected-item ${isAdj ? 'adjustment' : ''} ${isFallback ? 'adjustment' : ''}">
+      <span class="item-name">${item.name}${isFallback ? ' <span style="font-size:0.7rem;color:var(--ink-faint);">（兜底）</span>' : ''}</span>
+      ${isVirtual ? '' : `
+      <div class="dose-control">
+        <button class="dose-btn" onclick="changeDose(${item.id}, -1)">−</button>
+        <input class="dose-input" type="number" value="${item.dose}" min="1" max="200" onchange="setDose(${item.id}, this.value)">
+        <span class="dose-unit">g</span>
+        <button class="dose-btn" onclick="changeDose(${item.id}, 1)">+</button>
+      </div>`}
+      ${isVirtual ? '<span></span>' : ''}
+      <span class="item-subtotal">¥${(item.price * item.dose).toFixed(2)}</span>
+      ${isVirtual ? '' : `<button class="remove-btn" onclick="toggleHerb(${item.id})">✕</button>`}
+    </div>
+  `;
+  }).join('');
+}
+
+function changeDose(id, delta) {
+  const item = selectedHerbs.find(s => s.id === id);
+  if (item) {
+    item.dose = Math.max(1, Math.min(200, item.dose + delta));
+    renderSelectedList();
+    updateSummary();
+  }
+}
+
+function setDose(id, val) {
+  const item = selectedHerbs.find(s => s.id === id);
+  if (item) {
+    item.dose = Math.max(1, Math.min(200, parseInt(val) || 1));
+    renderSelectedList();
+    updateSummary();
+  }
+}
+
+// 计算基础价格（不含调价款和兜底价）
+function getBasePrice() {
+  return selectedHerbs
+    .filter(h => h.id !== ADJUSTMENT_ID && h.id !== FALLBACK_ID)
+    .reduce((sum, h) => sum + h.price * h.dose, 0);
+}
+
+// 计算应加金额
+function calcAdjustment(basePrice) {
+  if (currentTier === 0) return 0;
+  const targetMin = currentTier === 1 ? 500 : currentTier === 2 ? 600 : 700;
+  if (basePrice >= targetMin) return 0;
+  const seed = Math.floor(basePrice * 100) % 80;
+  const target = targetMin + seed;
+  return Math.max(0, target - basePrice);
+}
+
+// 应用档次加价
+function applyTierAdjustment() {
+  const adjIdx = selectedHerbs.findIndex(h => h.id === ADJUSTMENT_ID);
+  if (adjIdx > -1) selectedHerbs.splice(adjIdx, 1);
+
+  const basePrice = getBasePrice();
+  const adjustmentAmount = calcAdjustment(basePrice);
+
+  if (adjustmentAmount > 0) {
+    selectedHerbs.push({
+      id: ADJUSTMENT_ID,
+      name: '调价款',
+      alias: '服务费',
+      category: '其他',
+      price: adjustmentAmount,
+      unit: '份',
+      effect: '价格调整',
+      dose: 1
+    });
+  }
+}
+
+function updateSummary() {
+  // 先应用档次加价（基于单剂价格）
+  applyTierAdjustment();
+
+  // 真实药材：排除调价款和兜底价
+  const realHerbs = selectedHerbs.filter(h => h.id !== ADJUSTMENT_ID && h.id !== FALLBACK_ID);
+  const count = realHerbs.length;
+  const hasFallback = selectedHerbs.some(h => h.id === FALLBACK_ID);
+  const singleWeight = realHerbs.reduce((sum, h) => sum + h.dose, 0);
+  const singlePrice = selectedHerbs.reduce((sum, h) => sum + h.price * h.dose, 0);
+  const totalPrice = singlePrice * doseCount;
+  const totalWeight = singleWeight * doseCount;
+
+  document.getElementById('totalCount').textContent = hasFallback ? '默认' : `${count} 味`;
+  document.getElementById('totalWeight').textContent = hasFallback ? '—' : `${singleWeight} g`;
+  document.getElementById('singleDosePrice').textContent = `¥${singlePrice.toFixed(2)}`;
+  document.getElementById('doseCountDisplay').textContent = `${doseCount} 剂`;
+  document.getElementById('totalPrice').textContent = `¥${totalPrice.toFixed(2)}`;
+  document.getElementById('prescriptionCount').textContent = hasFallback ? '默认' : `${count} 味`;
+
+  // 更新总价大卡片
+  const bigPriceEl = document.getElementById('bigPriceValue');
+  bigPriceEl.textContent = `¥${totalPrice.toFixed(2)}`;
+  const detailText = hasFallback
+    ? `默认价 · ${doseCount} 剂 · 单剂 ¥${singlePrice.toFixed(2)}`
+    : `${count} 味 · ${doseCount} 剂 · 单剂 ¥${singlePrice.toFixed(2)}`;
+  document.getElementById('bigPriceDetail').textContent = detailText;
+
+  // 价格变化时闪一下
+  bigPriceEl.classList.remove('flash');
+  void bigPriceEl.offsetWidth;
+  if (count > 0) bigPriceEl.classList.add('flash');
+}
+
+// 设置服用剂数
+function setDoseCount(n) {
+  doseCount = Math.max(1, Math.min(90, parseInt(n) || 1));
+  // 更新按钮状态
+  document.querySelectorAll('.dm-btn').forEach(btn => {
+    const val = parseInt(btn.textContent);
+    btn.classList.toggle('active', val === doseCount);
+  });
+  // 更新自定义输入框
+  document.getElementById('dmCustom').value = doseCount;
+  document.getElementById('dmCurrent').textContent = `${doseCount} 剂`;
+  updateSummary();
+}
+
+// 切换档次
+function setTier(tier) {
+  currentTier = tier;
+  document.querySelectorAll('.tier-btn').forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.tier) === tier);
+  });
+  updateSummary();
+  renderSelectedList();
+}
+
+function clearPrescription() {
+  if (selectedHerbs.length === 0) return;
+  selectedHerbs = [];
+  setDoseCount(1);
+  // 清空时重置为原价档
+  currentTier = 0;
+  document.querySelectorAll('.tier-btn').forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.tier) === 0);
+  });
+  showToast('处方已清空');
+  renderHerbGrid();
+  renderSelectedList();
+  updateSummary();
+}
+
+function exportPrescription() {
+  if (selectedHerbs.length === 0) { showToast('处方为空'); return; }
+  const realHerbs = selectedHerbs.filter(h => h.id !== ADJUSTMENT_ID && h.id !== FALLBACK_ID);
+  const adjItem = selectedHerbs.find(h => h.id === ADJUSTMENT_ID);
+  const fallbackItem = selectedHerbs.find(h => h.id === FALLBACK_ID);
+  const singleWeight = realHerbs.reduce((sum, h) => sum + h.dose, 0);
+  const basePrice = realHerbs.reduce((sum, h) => sum + h.price * h.dose, 0);
+  const singlePrice = selectedHerbs.reduce((sum, h) => sum + h.price * h.dose, 0);
+  const totalPrice = singlePrice * doseCount;
+  const now = new Date();
+  const dateStr = `${now.getFullYear()}年${now.getMonth()+1}月${now.getDate()}日`;
+
+  let text = `━━━━━━━━━━━━━━━━━━━━━━\n`;
+  text += `       中 药 处 方 清 单\n`;
+  text += `       ${dateStr}\n`;
+  text += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+  if (fallbackItem) {
+    text += `【默认计价】识别失败兜底\n`;
+    text += `  默认处方（${fallbackItem.alias}）  1剂   ¥${fallbackItem.price.toFixed(2)}/剂   ¥${fallbackItem.price.toFixed(2)}\n`;
+  } else {
+    text += `【单剂处方】 共 ${realHerbs.length} 味\n`;
+    text += `序号  药材名称      剂量   单价      小计\n`;
+    text += `────────────────────────────────────\n`;
+    realHerbs.forEach((item, i) => {
+      const idx = String(i + 1).padStart(2, ' ');
+      const name = item.name.padEnd(6, '　');
+      const dose = `${item.dose}g`.padStart(5, ' ');
+      const price = `¥${item.price < 0.1 ? item.price.toFixed(3) : item.price.toFixed(2)}/g`.padStart(10, ' ');
+      const sub = `¥${(item.price * item.dose).toFixed(2)}`;
+      text += `${idx}   ${name}    ${dose}  ${price}   ${sub}\n`;
+    });
+    if (adjItem) {
+      text += `  *   调价款       1份   ¥${adjItem.price.toFixed(2)}/份   ¥${adjItem.price.toFixed(2)}\n`;
+    }
+  }
+  text += `────────────────────────────────────\n`;
+  text += `\n  单剂克重：${fallbackItem ? '—' : singleWeight + 'g'}\n`;
+  text += `  单剂价格：¥${singlePrice.toFixed(2)}\n`;
+  if (adjItem) {
+    text += `    （药材 ¥${basePrice.toFixed(2)} + 调价 ¥${adjItem.price.toFixed(2)}）\n`;
+  }
+  text += `\n  服用剂数：${doseCount} 剂\n`;
+  text += `  总克重：${fallbackItem ? '—' : singleWeight * doseCount + 'g'}\n`;
+  text += `\n  ═══════════════════════\n`;
+  text += `       总合计：¥${totalPrice.toFixed(2)}\n`;
+  text += `  ═══════════════════════\n`;
+
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `中药处方_${dateStr}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('处方清单已导出');
+}
+
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2000);
+}
+
+// 启动
+init();
+</script>
+</body>
+</html>
